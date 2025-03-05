@@ -1,0 +1,1 @@
+'white sneaker', 'white sneaker', 'red and white sneaker', 'red and white sneaker', 'black and white slip-on shoe', 'black and white slip-on shoe', 'white high heel', 'white high heel', 'white high heel', 'white high heel', 'black slip-on shoe'
