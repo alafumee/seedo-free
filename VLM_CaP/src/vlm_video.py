@@ -3,6 +3,7 @@ from IPython.display import display, Image, Audio
 import cv2  # We're using OpenCV to read video, to install !pip install opencv-python
 import base64
 import time
+import numpy as np
 from openai import OpenAI
 import os
 import requests
@@ -52,3 +53,15 @@ def extract_frame_list(frames_list):
     print(len(base64Frames), "frames processed.")
 
     return base64Frames  # 返回包含所有帧的 Base64 编码的列表
+
+def base64_to_cv2(base64_str):
+    """
+    将 Base64 编码的字符串转换为 OpenCV 图像。
+    
+    :param base64_str: Base64 编码的图像字符串。
+    :return: OpenCV 图像（NumPy 数组）。
+    """
+    img_data = base64.b64decode(base64_str)
+    np_arr = np.frombuffer(img_data, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    return img
