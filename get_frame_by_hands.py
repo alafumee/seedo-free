@@ -60,7 +60,7 @@ class FrameExtractor:
         print(f"The decided handedness is {self.handedness}.")
 
         print(f"Processing the speed curve of {self.handedness} hand.")
-        smoothed_curve = self.process_speed_curve()
+        smoothed_curve = self.process_speed_curve_fallback()
 
         print(f"Getting the peaks and valleys of the speed curve of {self.handedness} hand.")
         peaks, valleys = self.get_peaks_valleys(smoothed_curve)
@@ -84,6 +84,8 @@ class FrameExtractor:
             frame = self.get_frame(valley)
             cv2.imwrite(f'{str(self.selected_folder)}/{valley}.jpg', frame)
         print(f"The selected valley frames are: {selected_valleys}")
+        last_frame = self.get_frame(self.num_frame-1)
+        cv2.imwrite(f'{str(self.selected_folder)}/{self.num_frame-1}.jpg', last_frame)
 
         for valley in valleys:
             frame = self.get_frame(valley)
@@ -295,6 +297,30 @@ class FrameExtractor:
         # Gaussian filter smoothing 
         y_smoothed = gaussian_filter(y_interpolated, sigma=self.gaussian_sigma)
 
+        return y_smoothed
+    
+    def process_speed_curve_fallback(self):
+        '''
+        Process the speed curve of the hand so we can find peaks and valley more robustly.
+
+        1. Use coordinates from another hand when the current hand has no coordinates.
+        '''
+        # linear interpolation
+        y = self.all_speeds[self.handedness]
+        nans, x_nans = np.isnan(y), lambda z: z.nonzero()[0]
+        # use the other hand's coordinates when the current hand has no coordinates
+        if np.count_nonzero(nans) > 0:
+            other_handedness = 'Left' if self.handedness == 'Right' else 'Right'
+            y[nans] = self.all_speeds[other_handedness][nans]
+        y_interpolated = y.copy()
+        # if np.isnan(y_interpolated).any():
+        #     y_interpolated[nans] = np.interp(x_nans(nans), x_nans(~nans), y[~nans])
+        nans, x_nans = np.isnan(y_interpolated), lambda z: z.nonzero()[0]
+        y_interpolated[nans] = np.interp(x_nans(nans), x_nans(~nans), y[~nans])
+
+        # Gaussian filter smoothing
+        y_smoothed = gaussian_filter(y_interpolated, sigma=self.gaussian_sigma)
+        
         return y_smoothed
     
     def get_peaks_valleys(self, smoothed_curve):

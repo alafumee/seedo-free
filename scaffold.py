@@ -59,6 +59,7 @@ def dot_matrix_two_dimensional(image_or_image_path, save_path = None, dots_size_
     
 def dot_matrix_two_dimensional_with_box(image_or_image_path, save_path = None, dots_size_w = 6, dots_size_h = 6, save_img = False, font_path = 'fonts/arial.tff', 
                             box_width = None, box_height = None, box_coords = None):
+    MAX_GLOBAL_GRID = 25
     with open_image(image_or_image_path) as img:
         if img.mode != 'RGB':
             img = img.convert('RGB')
@@ -70,18 +71,18 @@ def dot_matrix_two_dimensional_with_box(image_or_image_path, save_path = None, d
         cell_width = box_width / grid_size_w
         cell_height = box_height / grid_size_h
         
-        if cell_width <= width / 20:
-            cell_width = width / 20
+        if cell_width <= width / MAX_GLOBAL_GRID:
+            cell_width = width / MAX_GLOBAL_GRID
             grid_size_w = int(np.floor(box_width / cell_width))
             dots_size_w = grid_size_w + 1
             cell_width = box_width / grid_size_w
-        if cell_height <= height / 20:
-            cell_height = height / 20
+        if cell_height <= height / MAX_GLOBAL_GRID:
+            cell_height = height / MAX_GLOBAL_GRID
             grid_size_h = int(np.floor(box_height / cell_height))
             dots_size_h = grid_size_h + 1
             cell_height = box_height / grid_size_h
 
-        font = ImageFont.truetype(font_path, width // 40)  # Adjust font size if needed; default == width // 40
+        font = ImageFont.truetype(font_path, width // (MAX_GLOBAL_GRID * 2))  # Adjust font size if needed; default == width // 40
 
         if box_coords is None:
             box_coords = (width // 2, height // 2)

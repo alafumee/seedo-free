@@ -50,23 +50,32 @@ def get_object_list(selected_frames):
         {
             "role": "system",
             "content": [
-                {"type": "text", "text": "You are a visual object detector. Your task is to count and identify the objects in the provided image that are on the desk. Focus on objects classified as grasped_objects and containers."}
+                {"type": "text", "text": "You are a visual object detector. Your task is to count and identify the objects in the provided image. Focus on objects classified as grasped_objects and containers."}
             ],
         },
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. We only care about objects on the desk. Do not count in hand or person as objects."},
-                {"type": "text", "text": "Based on the input picture, answer:"},
-                {"type": "text", "text": "1. How many objects are there in the environment?"},
+                # {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. Do not count in hand or person as objects."},
+                {"type": "text", "text": "You will be presented wit two image frames, the first one showing the environment state when the manipulation begins, and the second one when the manipulation ends."},
+                {"type": "text", "text": "Please focus on the objects or object parts that have moved or changed in state between these two frames. Other irrelevant objects can be ignored. Do not count in hand or person as objects."},
+                {"type": "text", "text": "Note that relevant objects are likely in the foreground, but they can also be in the background if they are interacted with. A relevant object can a part of a larger object."},
+                {"type": "text", "text": "Based on the input pictures, answer:"},
+                {"type": "text", "text": "1. How many objects are there in the environment involved in the manipulation?"},
                 {"type": "text", "text": "2. What are these objects?"},
                 {"type": "text", "text": "You should respond in the format of the following example:"},
-                {"type": "text", "text": "Number: 1"},
-                {"type": "text", "text": "Objects: purple eggplant, red tomato, white bowl, white bowl"},
+                {"type": "text", "text": "Number: 3"},
+                {"type": "text", "text": "Objects: purple eggplant, white bowl, drawer"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/jpeg;base64,{selected_frames[0]}"
+                    }
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{selected_frames[-1]}"
                     }
                 }
             ],
@@ -84,7 +93,7 @@ def extract_num_object(response_state):
     objects_list = objects_match.group(1).split(", ") if objects_match else []
     
     # construct object list
-    objects = [obj for obj in objects_list]
+    objects = [obj.strip() for obj in objects_list]
     
     return num, objects
 def extract_keywords_pick(response):
@@ -155,20 +164,66 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "These are two images from a manipuation task, showing two consecutive keyframes. Please analyze the manipulation process that has happened between these two frames."},
-                    {"type": "text", "text": "You need to clearly point out the names of the objects involved in the manipulation process, their motion, and their interaction with each other or with the manipulator."},
-                    {"type": "text", "text": "Keep in mind that the action between the two keyframes should be a simple process, and only the objects being interacted with in the two frames should be mentioned."},
-                    {"type": "text", "text": "You should respond in the format of the following examples:"},
-                    {"type": "text", "text": "Objects: mug, pen. Interaction: The mug is being moved closer to the pen."},
-                    {"type": "text", "text": "Objects: red chili. Interaction: The red chili is being picked up by the hand."},
+                    # {"type": "text", "text": "These are two images from a manipuation task, showing two consecutive keyframes. Please analyze the manipulation process that has happened between these two frames."},
+                    # {"type": "text", "text": "You need to clearly point out the names of the objects involved in the manipulation process, their motion, and their interaction with each other or with the manipulator."},
+                    # {"type": "text", "text": "Keep in mind that the action between the two keyframes should be a simple process, and only the objects being interacted with in the two frames should be mentioned."},
+                    # {"type": "text", "text": "You should respond in the format of the following examples:"},
+                    # {"type": "text", "text": "Objects: mug, pen. Interaction: The mug is being moved closer to the pen."},
+                    # {"type": "text", "text": "Objects: red chili. Interaction: The red chili is being picked up by the hand."},
+                    # {"type": "text", "text": "Note that if you consider the two images to be too similar, or there is no progress in the manipulation task, you should respond with 'No significant change'."},
+                    # {"type": "text", "text": "Likewise, if the two images are are completely different, for example, the scene has changed, you should respond with 'Not consecutive keyframes'."},
+                    # # {"type": "text", "text": f"Finally, the description you provided on the previous step is '{last_step_description}'. The 'Objects' in the last step correspond to the objects in the first image frame you see."},
+                    # # {"type": "text", "text": "Please identify each object name in the previous step's description with objects in the first frame, and use the same names for the same objects in your response. "},
+                    # {"type": "text", "text": f"If possible, please refer to the objects with names in the object list: {obj_list}."},
+                    # {"type": "text", "text": "Please precisely describe ONLY the action of the hand between the two keyframes, which should be independent of the previous step's description or the implied intent."},
+                    # # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
+                    # # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
+                    
+                    {"type": "text", "text": "Analyze these two consecutive frames and describe the precise interaction between the hand and objects. Focus on:"},
+                    {"type": "text", "text": "1. Relative positions between objects (above/below, left/right, in front of/behind, closer to/farther from)"},
+                    {"type": "text", "text": "2. Hand posture and grip changes (tightening/loosening, pushing/pulling, rotating, etc.)"},
+                    {"type": "text", "text": "3. Object state and movement (being moved, flipped, opened/closed, etc.)"},
+                    {"type": "text", "text": "Provide your response in the following structured format:"},
+                    {"type": "text", "text": "Objects: [List all visible objects in the scene]"},
+                    {"type": "text", "text": "Contact Relations: [Describe which objects are touching/contacting each other]"},
+                    {"type": "text", "text": "Interaction: [Describe the spatial relationship change between objects using precise action verbs and positional language]"},
+
+                    {"type": "text", "text": "Example input:"},
+                    {"type": "text", "text": "[Frame 1] Hand is hovering above a table surface. A coffee mug is on the left side of the table and a pen is on the right side. The mug and pen are not touching. Hand is not in contact with any objects."},
+                    {"type": "text", "text": "[Frame 2] Hand is gripping the mug handle. The mug has been moved to the right and is now touching the pen. Both objects remain on the table surface."},
+
+                    {"type": "text", "text": "Example output:"},
+                    {"type": "text", "text": "Objects: hand, mug, pen, table"},
+                    {"type": "text", "text": "Contact Relations: Hand is gripping the mug handle. The mug is touching the pen. Both mug and pen are in contact with the table."},
+                    {"type": "text", "text": "Interaction: The mug is being moved closer to the pen until they touch."},
+
+                    {"type": "text", "text": "Focus on capturing:"},
+                    {"type": "text", "text": "1. All relevant objects in the scene"},
+                    {"type": "text", "text": "2. All contact points between objects and hands"},
+                    {"type": "text", "text": "3. Precise spatial relationship changes"},
+                    {"type": "text", "text": "4. State changes of objects"},
+
+                    {"type": "text", "text": "Provide only the structured output without additional explanation."},
+                    # {"type": "text", "text": "You should respond in the format of the following examples:"},
+                    # {"type": "text", "text": "Example:"},
+                    # {"type": "text", "text": "Hand is open, positioned about 10cm above the table surface. On the table, a coffee mug is on the left and a pen is on the right, approximately 20cm apart. A drawer is partially open."},
+                    # {"type": "text", "text": "Hand is gripping the mug handle, moving the mug about 10cm to the right, bringing the coffee mug closer to the pen. The drawer has been pushed to a fully closed position."},
+
+                    # {"type": "text", "text": "These are two images from a manipuation task, showing two consecutive keyframes. Please analyze the manipulation process that has happened between these two frames."},
+                    # {"type": "text", "text": "You need to clearly point out the names of the objects involved in the manipulation process, their motion, and their interaction with each other or with the manipulator."},
+                    # {"type": "text", "text": "Keep in mind that the action between the two keyframes should be a simple process, and only the objects being interacted with in the two frames should be mentioned."},
+                    # {"type": "text", "text": "Objects: mug, pen. Interaction: The mug is being moved closer to the pen."},
+                    # {"type": "text", "text": "Objects: red chili. Interaction: The red chili is being picked up by the hand."},
                     {"type": "text", "text": "Note that if you consider the two images to be too similar, or there is no progress in the manipulation task, you should respond with 'No significant change'."},
                     {"type": "text", "text": "Likewise, if the two images are are completely different, for example, the scene has changed, you should respond with 'Not consecutive keyframes'."},
                     # {"type": "text", "text": f"Finally, the description you provided on the previous step is '{last_step_description}'. The 'Objects' in the last step correspond to the objects in the first image frame you see."},
                     # {"type": "text", "text": "Please identify each object name in the previous step's description with objects in the first frame, and use the same names for the same objects in your response. "},
                     {"type": "text", "text": f"If possible, please refer to the objects with names in the object list: {obj_list}."},
                     {"type": "text", "text": "Please precisely describe ONLY the action of the hand between the two keyframes, which should be independent of the previous step's description or the implied intent."},
+                    {"type": "text", "text": "Describe what action is occurring between these frames using precise spatial and semantic language."},
                     # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
                     # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
+                    
                     # First image
                     {
                         "type": "image_url",
@@ -363,7 +418,8 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                     {"type": "text", "text": "Keep in mind that each segment of description composed of a 'Objects' and 'Interaction' part corresponds to the interval between two consecutive keyframes. That is, the first description should describe the action between the first and second keyframes, the second description should describe the action between the second and third keyframes, and so on."},
                     {"type": "text", "text": "You need to pay attention to the names of the objects mentioned, and the motion and interaction of the objects with each other or with the manipulator."},
                     {"type": "text", "text": "If an object is referred to by a different name at some step than other steps, you should correct it. If necessary, correct the actions so that the actions form a coherent sequence that complete a manipulation task."},
-                    {"type": "text", "text": "Please retain the format of the response as 'Objects: object1, object2, ... Interaction: action description. [SEG] ... ' Directly respond with the revised description without any additional information or reason steps."},
+                    {"type": "text", "text": "You can only correct the descriptions within each step. Do not create new steps or delete old ones."},
+                    {"type": "text", "text": "Please retain the format of the response as 'Objects: object1, object2, ... Interaction: action description. [SEG] ... ' Directly respond with the revised description without any additional information or explanation."},
                     {"type": "text", "text": f"The dscription is {string_cache}. The image frames are as the following:"},
                     # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
                     # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
@@ -387,6 +443,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
     scaffold_grid_dict = dict()
     start_image = None
     
+    constraint_dict_list = []
     for i in range(len(revised_response_list)):
         input_frame_analysis_1 = selected_frames[i]
         input_frame_analysis_2 = selected_frames[i+1]
@@ -402,7 +459,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             frame_object_list = frame_analysis.split("Interaction:")[0].split("Objects:")[1].strip().split(',') if "Interaction:" in response_analysis else ""
             for object_name in obj_list:
                 start_image_copy = start_image.copy()
-                box_coords = find_keypoint_coords(input_frame_analysis_1_rgb, object_name.strip('. '), save_path=f"./visualization/{i}_{object_name.strip('. ')}.jpg")
+                box_coords = find_keypoint_coords(input_frame_analysis_1_rgb, object_name.strip('. '), save_path=f"./visualization_3/{i}_{object_name.strip('. ')}.jpg")
                 box_coords  = box_coords[0] * np.array([w, h, w, h])
                 # box_center = int((box_coords[0] + box_coords[2]) / 2), int((box_coords[1] + box_coords[3]) / 2)
                 # box_width = 2 * np.ceil(max(box_coords[0] - box_center[0], box_center[0] - box_coords[2]))
@@ -412,7 +469,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 box_height = round(box_coords[3])
                 scaffold_img, (box_left, box_top), (cell_width, cell_height) = dot_matrix_two_dimensional_with_box(
                     image_or_image_path=start_image_copy,
-                    save_path=f"./visualization/scaffold_{object_name.strip('. ')}.jpg",
+                    save_path=f"./visualization_3/scaffold_{object_name.strip('. ')}.jpg",
                     save_img=True,
                     box_width=box_width,
                     box_height=box_height,
@@ -501,6 +558,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             constraint_str = response_constraint.strip("```").strip('json')
             constraint_dict = json.loads(constraint_str)
         print("Constraint response:", constraint_dict)
+        constraint_dict_list.append(constraint_dict)
         
         if isinstance(constraint_dict['Subpath'], dict):
             subpath_constraint_dict = constraint_dict["Subpath"]
@@ -520,11 +578,43 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                         obj_keypoint_dict[obj_name] = []
                     obj_keypoint_dict[obj_name].append(keypoint)
         
-    select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, constraint_obj_list, scaffold_grid_dict)
+    keypoint_coord_list = select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, constraint_obj_list, scaffold_grid_dict)
     
-    return string_cache
+    # save start_image
+    start_image.save(f"./rekep_ready/start_image.jpg")
+    start_image_path = os.path.abspath(f"./rekep_ready/start_image.jpg")
+    print(start_image_path)
+    
+    # organize the substage descriptions and constraint descriptions
+    constraint_compendium = ""
+    plan_string = ""
+    for step_idx in range(len(revised_response_list)):
+        step_desc = revised_response_list[step_idx]
+        constraint_desc = constraint_dict_list[step_idx]
+        interaction_desc = step_desc.split("Interaction:")[1].strip('\n ')
+        plan_string += f"{interaction_desc}\n"
+        path_constraint_desc = constraint_desc["Subpath"]["Constraint"].strip('\n ')
+        subgoal_constraint_desc = constraint_desc["Subgoal"]["Constraint"].strip('\n ')
+        constraint_compendium += f"Description: {interaction_desc}\n"
+        constraint_compendium += f"Path Constraint: {path_constraint_desc}\n"
+        constraint_compendium += f"Subgoal Constraint: {subgoal_constraint_desc}\n \n"
+    
+    composed_json_dict = {
+        "Plan": plan_string,
+        "Constraints": constraint_compendium,
+        "Keypoints": keypoint_coord_list,
+        "Keypoint_Image_Path": start_image_path,
+    }
+     # save as json
+    composed_json_string = json.dumps(composed_json_dict, indent=4)
+    output_file_path = os.path.join(os.path.dirname(start_image_path), "output.json")
+    with open(output_file_path, "w") as json_file:
+        json_file.write(composed_json_string)
+    
+    return constraint_compendium, plan_string, keypoint_coord_list
 
 def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, scaffold_grid_dict):
+    all_keypoints_list = []
     for obj_name, keypoints in keypoint_dict.items():
         if obj_name in obj_list:
             scaffold_params = scaffold_grid_dict.get(obj_name, None)
@@ -559,22 +649,24 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             response_keypoint = call_openai_api(prompt_message_keypoint)
             keypoint_index_list = eval(response_keypoint) if response_keypoint else []
             print("Keypoint response:", keypoint_index_list)
+            print("Keypoints:", keypoints)
             # Check if the response is a list of tuples
             if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
                 print(f"Invalid response format for {obj_name}: {response_keypoint}")
                 continue
-            annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
-            
+            keypoint_coord_list, annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
+            all_keypoints_list.extend(keypoint_coord_list)
             # Draw the keypoints on the image
             # for point in keypoints:
             #     x, y = point
             #     cv2.circle(annotated_image, (x, y), 5, (0, 255, 0), -1)
             # # Add a label for the object
             # cv2.putText(annotated_image, obj_name, (x + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-    return annotated_image_np
+    return all_keypoints_list
 
 def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
     # Create a copy of the start image to draw on
+    keypoint_coord_list = []
     annotated_image = start_image.copy()
     annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
     # Draw keypoints and labels on the image
@@ -583,12 +675,14 @@ def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_param
         # Calculate the position for the label
         label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
         label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
-        cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 5, (0, 255, 0), -1)
+        keypoint_coord_list.append((int(label_x), int(label_y)))
+        cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 4, (0, 255, 0), -1)
         cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(label_x) + 10, int(label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         # save fig
-    cv2.imwrite(f"./visualization/keypoints_{obj_name}.jpg", annotated_image_np)
+        print(f"keypoint {y},{x}, position: ", int(label_x), int(label_y))
+    cv2.imwrite(f"./visualization_3/keypoints_{obj_name}.jpg", annotated_image_np)
     
-    return annotated_image_np
+    return keypoint_coord_list, annotated_image_np
 
 def save_results_to_csv(demo_name, num, obj_list, string_cache, output_file):
     file_exists = os.path.exists(output_file)
@@ -670,6 +764,10 @@ def main(input_video_path, frame_index_list, bbx_list):
             ret, cv2_image = cap.read()
             if ret:
                 interim_raw_frames1.append(cv2_image)
+                # save img
+                interim_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
+                interim_image = Image.fromarray(interim_image)
+                interim_image.save(f"./visualization_3/interim_{index}.jpg")
             else:
                 print(f"Failed to retrieve frame at index {index}")
         else:

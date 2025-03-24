@@ -29,6 +29,7 @@ __pycache__/
 
 # results
 results/
+rekep_ready
 
 # bash code
 *.sh
