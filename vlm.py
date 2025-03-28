@@ -113,17 +113,26 @@ def get_object_list(selected_frames):
         {
             "role": "user",
             "content": [
-                # {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. "},
-                {"type": "text", "text": "Based on the input picture, answer:"},
-                {"type": "text", "text": "1. How many objects are there in the environment?"},
+                # {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. Do not count in hand or person as objects."},
+                {"type": "text", "text": "You will be presented wit two image frames, the first one showing the environment state when the manipulation begins, and the second one when the manipulation ends."},
+                {"type": "text", "text": "Please focus on the objects or object parts that have moved or changed in state between these two frames. Other irrelevant objects can be ignored. Do not count in hand or person as objects."},
+                {"type": "text", "text": "Note that relevant objects are likely in the foreground, but they can also be in the background if they are interacted with. A relevant object can a part of a larger object."},
+                {"type": "text", "text": "Based on the input pictures, answer:"},
+                {"type": "text", "text": "1. How many objects are there in the environment involved in the manipulation?"},
                 {"type": "text", "text": "2. What are these objects?"},
                 {"type": "text", "text": "You should respond in the format of the following example:"},
-                {"type": "text", "text": "Number: 1"},
-                {"type": "text", "text": "Objects: purple eggplant, red tomato, white bowl, white bowl"},
+                {"type": "text", "text": "Number: 3"},
+                {"type": "text", "text": "Objects: purple eggplant, white bowl, drawer"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/jpeg;base64,{selected_frames[0]}"
+                    }
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{selected_frames[-1]}"
                     }
                 }
             ],
@@ -144,7 +153,7 @@ def extract_num_object(response_state):
     objects_list = [re.sub(r'\s*\([^)]*\)', '', obj) for obj in objects_list]
     print(objects_list,end=" objects_list\n")
     # construct object list
-    objects = [obj for obj in objects_list]
+    objects = [obj.strip() for obj in objects_list]
 
     return num, objects
 def extract_keywords_pick(response):
@@ -263,6 +272,7 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                     {"type": "text", "text": "Describe what action is occurring between these frames using precise spatial and semantic language."},
                     # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
                     # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
+
                     # First image
                     {
                         "type": "image_url",
@@ -463,7 +473,8 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                     {"type": "text", "text": "Keep in mind that each segment of description composed of a 'Objects' and 'Interaction' part corresponds to the interval between two consecutive keyframes. That is, the first description should describe the action between the first and second keyframes, the second description should describe the action between the second and third keyframes, and so on."},
                     {"type": "text", "text": "You need to pay attention to the names of the objects mentioned, and the motion and interaction of the objects with each other or with the manipulator."},
                     {"type": "text", "text": "If an object is referred to by a different name at some step than other steps, you should correct it. If necessary, correct the actions so that the actions form a coherent sequence that complete a manipulation task."},
-                    {"type": "text", "text": "Please retain the format of the response as 'Objects: object1, object2, ... Interaction: action description. [SEG] ... ' Directly respond with the revised description without any additional information or reason steps."},
+                    {"type": "text", "text": "You can only correct the descriptions within each step. Do not create new steps or delete old ones."},
+                    {"type": "text", "text": "Please retain the format of the response as 'Objects: object1, object2, ... Interaction: action description. [SEG] ... ' Directly respond with the revised description without any additional information or explanation."},
                     {"type": "text", "text": f"The dscription is {string_cache}. The image frames are as the following:"},
                     # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
                     # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
@@ -494,6 +505,8 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
     start_image = None
     detected_object_list = []
 
+
+    constraint_dict_list = []
     for i in range(len(revised_response_list)):
         input_frame_analysis_1 = selected_frames[i]
         input_frame_analysis_2 = selected_frames[i+1]
@@ -642,6 +655,8 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
             constraint_dict = json.loads(constraint_str)
         print("Constraint response:", constraint_dict)
 
+        constraint_dict_list.append(constraint_dict)
+
         if isinstance(constraint_dict['Subpath'], dict):
             subpath_constraint_dict = constraint_dict["Subpath"]
             if subpath_constraint_dict != 'N/A':
@@ -660,13 +675,43 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                         obj_keypoint_dict[obj_name] = []
                     obj_keypoint_dict[obj_name].append(keypoint)
 
-    select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, detected_object_list, scaffold_grid_dict)
+    keypoint_coord_list = select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, constraint_obj_list, scaffold_grid_dict)
 
-    return string_cache
+    # save start_image
+    start_image.save(f"./rekep_ready/start_image.jpg")
+    start_image_path = os.path.abspath(f"./rekep_ready/start_image.jpg")
+    print(start_image_path)
+
+    # organize the substage descriptions and constraint descriptions
+    constraint_compendium = ""
+    plan_string = ""
+    for step_idx in range(len(revised_response_list)):
+        step_desc = revised_response_list[step_idx]
+        constraint_desc = constraint_dict_list[step_idx]
+        interaction_desc = step_desc.split("Interaction:")[1].strip('\n ')
+        plan_string += f"{interaction_desc}\n"
+        path_constraint_desc = constraint_desc["Subpath"]["Constraint"].strip('\n ')
+        subgoal_constraint_desc = constraint_desc["Subgoal"]["Constraint"].strip('\n ')
+        constraint_compendium += f"Description: {interaction_desc}\n"
+        constraint_compendium += f"Path Constraint: {path_constraint_desc}\n"
+        constraint_compendium += f"Subgoal Constraint: {subgoal_constraint_desc}\n \n"
+
+    composed_json_dict = {
+        "Plan": plan_string,
+        "Constraints": constraint_compendium,
+        "Keypoints": keypoint_coord_list,
+        "Keypoint_Image_Path": start_image_path,
+    }
+     # save as json
+    composed_json_string = json.dumps(composed_json_dict, indent=4)
+    output_file_path = os.path.join(os.path.dirname(start_image_path), "output.json")
+    with open(output_file_path, "w") as json_file:
+        json_file.write(composed_json_string)
+
+    return constraint_compendium, plan_string, keypoint_coord_list
 
 def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, scaffold_grid_dict):
-    # print(keypoint_dict,end=f'  keypoint dict before selection\n')
-    print(obj_list,end=f'  obj list\n')
+    all_keypoints_list = []
     for obj_name, keypoints in keypoint_dict.items():
         print(obj_name,end=f'  obj name\n')
         # delete space in beginning and end of obj_name
@@ -725,6 +770,7 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             response_keypoint = call_openai_api(prompt_message_keypoint)
             keypoint_index_list = eval(response_keypoint) if response_keypoint else []
             print("Keypoint response:", keypoint_index_list)
+            print("Keypoints:", keypoints)
             # Check if the response is a list of tuples
 
             # if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
@@ -733,17 +779,23 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
 
             annotated_image_np = visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
 
+            if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
+                print(f"Invalid response format for {obj_name}: {response_keypoint}")
+                continue
+            keypoint_coord_list, annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
+            all_keypoints_list.extend(keypoint_coord_list)
             # Draw the keypoints on the image
             # for point in keypoints:
             #     x, y = point
             #     cv2.circle(annotated_image, (x, y), 5, (0, 255, 0), -1)
             # # Add a label for the object
             # cv2.putText(annotated_image, obj_name, (x + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-    return annotated_image_np
+    return all_keypoints_list
 
 def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
     ## for grid points
     # Create a copy of the start image to draw on
+    keypoint_coord_list = []
     annotated_image = start_image.copy()
     annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
     # Draw keypoints and labels on the image
@@ -752,12 +804,17 @@ def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_param
         # Calculate the position for the label
         label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
         label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
-        cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 5, (0, 255, 0), -1)
+        keypoint_coord_list.append((int(label_x), int(label_y)))
+        cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 4, (0, 255, 0), -1)
         cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(label_x) + 10, int(label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         # save fig
     cv2.imwrite(f"./visualization/keypoints_{obj_name}.jpg", annotated_image_np)
 
-    return annotated_image_np
+    # return annotated_image_np
+        print(f"keypoint {y},{x}, position: ", int(label_x), int(label_y))
+    cv2.imwrite(f"./visualization_3/keypoints_{obj_name}.jpg", annotated_image_np)
+
+    return keypoint_coord_list, annotated_image_np
 
 def visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
     # Create a copy of the start image to draw on
@@ -864,6 +921,10 @@ def main(input_video_path, frame_index_list, bbx_list, output_dir):
             ret, cv2_image = cap.read()
             if ret:
                 interim_raw_frames1.append(cv2_image)
+                # save img
+                interim_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
+                interim_image = Image.fromarray(interim_image)
+                interim_image.save(f"./visualization_3/interim_{index}.jpg")
             else:
                 print(f"Failed to retrieve frame at index {index}")
         else:
