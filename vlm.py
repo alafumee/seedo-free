@@ -15,7 +15,64 @@ import ast
 from VLM_CaP.src.vlm_video import extract_frame_list, base64_to_cv2  # import extract_frames
 from keypoint_prompt import find_keypoint_coords
 from PIL import Image
-from scaffold import dot_matrix_two_dimensional_with_box
+from scaffold import dot_matrix_two_dimensional_with_box, annotate_image
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+import matplotlib.pyplot as plt
+def show_mask(mask, ax, random_color=False, borders = True):
+    if random_color:
+        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    else:
+        color = np.array([30/255, 144/255, 255/255, 0.6])
+    h, w = mask.shape[-2:]
+    mask = mask.astype(np.uint8)
+    mask_image =  mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    if borders:
+        import cv2
+        contours, _ = cv2.findContours(mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        # Try to smooth contours
+        contours = [cv2.approxPolyDP(contour, epsilon=0.01, closed=True) for contour in contours]
+        mask_image = cv2.drawContours(mask_image, contours, -1, (1, 1, 1, 0.5), thickness=2)
+    ax.imshow(mask_image)
+
+def show_points(coords, labels, ax, marker_size=375):
+    pos_points = coords[labels==1]
+    neg_points = coords[labels==0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+
+def show_box(box, ax):
+    x0, y0 = box[0], box[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))
+
+def show_masks(image, masks, scores, obj_name, point_coords=None, box_coords=None, input_labels=None, borders=True):
+    print(" drawing masks ---------\n")
+    for i, (mask, score) in enumerate(zip(masks, scores)):
+        print(f"drawing mask {i+1} ---------\n")
+        plt.figure(figsize=(10, 10))
+        plt.imshow(image)
+        show_mask(mask, plt.gca(), borders=borders)
+        if point_coords is not None:
+            assert input_labels is not None
+            show_points(point_coords, input_labels, plt.gca())
+        if box_coords is not None:
+            # boxes
+            show_box(box_coords, plt.gca())
+        if len(scores) > 1:
+            plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+        plt.axis('off')
+        # plt.show()
+    # save the plot
+        plt.savefig(f"/home/yunzhe/seedo-free/visualization/{obj_name}_mask_{i}.jpg")
+def build_sam2_model():
+    print("building sam2 model ---------\n")
+    sam2_checkpoint = "../SeeDo/segment-anything-2/checkpoints/sam2.1_hiera_large.pt"
+    model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+    predictor = SAM2ImagePredictor(build_sam2(model_cfg, sam2_checkpoint))
+    print("sam2 model built ---------\n")
+    return predictor
+
 # set up your openai api key
 # client = OpenAI(api_key=projectkey)
 
@@ -50,13 +107,13 @@ def get_object_list(selected_frames):
         {
             "role": "system",
             "content": [
-                {"type": "text", "text": "You are a visual object detector. Your task is to count and identify the objects in the provided image that are on the desk. Focus on objects classified as grasped_objects and containers."}
+                {"type": "text", "text": "You are a visual object detector. Your task is to count and identify the objects in the provided image. Focus on objects classified as grasped_objects and containers. "}
             ],
         },
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. We only care about objects on the desk. Do not count in hand or person as objects."},
+                # {"type": "text", "text": "There are two kinds of objects, grasped_objects and containers in the environment. "},
                 {"type": "text", "text": "Based on the input picture, answer:"},
                 {"type": "text", "text": "1. How many objects are there in the environment?"},
                 {"type": "text", "text": "2. What are these objects?"},
@@ -78,14 +135,17 @@ def extract_num_object(response_state):
     # extract number of objects
     num_match = re.search(r"Number: (\d+)", response_state)
     num = int(num_match.group(1)) if num_match else 0
-    
+
     # extract objects
     objects_match = re.search(r"Objects: (.+)", response_state)
+    print(objects_match,end=" objects_match\n")
     objects_list = objects_match.group(1).split(", ") if objects_match else []
-    
+    # 移除对象名称中的括号部分
+    objects_list = [re.sub(r'\s*\([^)]*\)', '', obj) for obj in objects_list]
+    print(objects_list,end=" objects_list\n")
     # construct object list
     objects = [obj for obj in objects_list]
-    
+
     return num, objects
 def extract_keywords_pick(response):
     try:
@@ -115,9 +175,13 @@ def parse_closest_object_and_relationship(response):
     print("Error parsing reference object and relationship from response:", response)
     return None, None
 
-def process_images(selected_frames, obj_list, interim_frames=None):
+def process_images(selected_frames, obj_list, interim_frames=None, output_dir=None):
     string_cache = ""  # cache for CaP operations
     i = 0
+    # clear the response_analysis.txt
+    with open(os.path.join(output_dir, "response_analysis.txt"), "w") as f:
+        f.truncate(0)
+    sam2_predictor = build_sam2_model()
     while i < len(selected_frames) - 1:
         # input_frame_pick = selected_frames[i:i+1]
         # prompt_messages_relevance_pick = [
@@ -155,18 +219,48 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "These are two images from a manipuation task, showing two consecutive keyframes. Please analyze the manipulation process that has happened between these two frames."},
-                    {"type": "text", "text": "You need to clearly point out the names of the objects involved in the manipulation process, their motion, and their interaction with each other or with the manipulator."},
-                    {"type": "text", "text": "Keep in mind that the action between the two keyframes should be a simple process, and only the objects being interacted with in the two frames should be mentioned."},
-                    {"type": "text", "text": "You should respond in the format of the following examples:"},
-                    {"type": "text", "text": "Objects: mug, pen. Interaction: The mug is being moved closer to the pen."},
-                    {"type": "text", "text": "Objects: red chili. Interaction: The red chili is being picked up by the hand."},
+                    {"type": "text", "text": "Analyze these two consecutive frames and describe the precise interaction between the hand and objects. Focus on:"},
+                    {"type": "text", "text": "1. Relative positions between objects (above/below, left/right, in front of/behind, closer to/farther from)"},
+                    {"type": "text", "text": "2. Hand posture and grip changes (tightening/loosening, pushing/pulling, rotating, etc.)"},
+                    {"type": "text", "text": "3. Object state and movement (being moved, flipped, opened/closed, etc.)"},
+                    {"type": "text", "text": "Provide your response in the following structured format:"},
+                    {"type": "text", "text": "Objects: [List all visible objects in the scene]"},
+                    {"type": "text", "text": "Contact Relations: [Describe which objects are touching/contacting each other]"},
+                    {"type": "text", "text": "Interaction: [Describe the spatial relationship change between objects using precise action verbs and positional language]"},
+
+                    {"type": "text", "text": "Example input:"},
+                    {"type": "text", "text": "[Frame 1] Hand is hovering above a table surface. A coffee mug is on the left side of the table and a pen is on the right side. The mug and pen are not touching. Hand is not in contact with any objects."},
+                    {"type": "text", "text": "[Frame 2] Hand is gripping the mug handle. The mug has been moved to the right and is now touching the pen. Both objects remain on the table surface."},
+
+                    {"type": "text", "text": "Example output:"},
+                    {"type": "text", "text": "Objects: hand, mug, pen, table"},
+                    {"type": "text", "text": "Contact Relations: Hand is gripping the mug handle. The mug is touching the pen. Both mug and pen are in contact with the table."},
+                    {"type": "text", "text": "Interaction: The mug is being moved closer to the pen until they touch."},
+
+                    {"type": "text", "text": "Focus on capturing:"},
+                    {"type": "text", "text": "1. All relevant objects in the scene"},
+                    {"type": "text", "text": "2. All contact points between objects and hands"},
+                    {"type": "text", "text": "3. Precise spatial relationship changes"},
+                    {"type": "text", "text": "4. State changes of objects"},
+
+                    {"type": "text", "text": "Provide only the structured output without additional explanation."},
+                    # {"type": "text", "text": "You should respond in the format of the following examples:"},
+                    # {"type": "text", "text": "Example:"},
+                    # {"type": "text", "text": "Hand is open, positioned about 10cm above the table surface. On the table, a coffee mug is on the left and a pen is on the right, approximately 20cm apart. A drawer is partially open."},
+                    # {"type": "text", "text": "Hand is gripping the mug handle, moving the mug about 10cm to the right, bringing the coffee mug closer to the pen. The drawer has been pushed to a fully closed position."},
+
+                    # {"type": "text", "text": "These are two images from a manipuation task, showing two consecutive keyframes. Please analyze the manipulation process that has happened between these two frames."},
+                    # {"type": "text", "text": "You need to clearly point out the names of the objects involved in the manipulation process, their motion, and their interaction with each other or with the manipulator."},
+                    # {"type": "text", "text": "Keep in mind that the action between the two keyframes should be a simple process, and only the objects being interacted with in the two frames should be mentioned."},
+                    # {"type": "text", "text": "Objects: mug, pen. Interaction: The mug is being moved closer to the pen."},
+                    # {"type": "text", "text": "Objects: red chili. Interaction: The red chili is being picked up by the hand."},
                     {"type": "text", "text": "Note that if you consider the two images to be too similar, or there is no progress in the manipulation task, you should respond with 'No significant change'."},
                     {"type": "text", "text": "Likewise, if the two images are are completely different, for example, the scene has changed, you should respond with 'Not consecutive keyframes'."},
                     # {"type": "text", "text": f"Finally, the description you provided on the previous step is '{last_step_description}'. The 'Objects' in the last step correspond to the objects in the first image frame you see."},
                     # {"type": "text", "text": "Please identify each object name in the previous step's description with objects in the first frame, and use the same names for the same objects in your response. "},
                     {"type": "text", "text": f"If possible, please refer to the objects with names in the object list: {obj_list}."},
                     {"type": "text", "text": "Please precisely describe ONLY the action of the hand between the two keyframes, which should be independent of the previous step's description or the implied intent."},
+                    {"type": "text", "text": "Describe what action is occurring between these frames using precise spatial and semantic language."},
                     # {"type": "text", "text": "If the last step's description is N/A or the interacted object is new, you can assign a fixed name to it in the 'Objects' and 'Interaction' part of your response."},
                     # {"type": "text", "text": "Additionally, if you think the previous description also accurately describes the current step, respond with 'Same as previous' instead."},
                     # First image
@@ -176,7 +270,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                             "url": f"data:image/jpeg;base64,{input_frame_analysis_1}",
                         }
                     },
-                    # Second image 
+                    # Second image
                     {
                         "type": "image_url",
                         "image_url": {
@@ -189,14 +283,20 @@ def process_images(selected_frames, obj_list, interim_frames=None):
         ]
         response_analysis = call_openai_api(prompt_messages_analysis)
         print(response_analysis)
+        ### save the response_analysis to a file
+        with open(os.path.join(output_dir, "response_analysis.txt"), "a") as f:
+            f.write(f"from frame {i} to frame {i+1}\n")
+            f.write(response_analysis + '\n' + '------------------------------------' + '\n')
+
+
         string_cache += response_analysis + '\n' + '[SEG]' + '\n'
         last_step_description = response_analysis
-        
+
         # input_frame_analysis_1_rgb = base64_to_cv2(input_frame_analysis_1)
         # object_list = response_analysis.split("Interaction:")[0].split("Objects:")[1].strip().split(',') if "Interaction:" in response_analysis else ""
         # for object_name in object_list:
         #     find_keypoint_coords(input_frame_analysis_1_rgb, object_name.strip('. '), save_path=f"./visualization/{i}_{object_name.strip('. ')}.jpg")
-        
+
         prompt_message_object = [
             {
                 "role": "system",
@@ -215,7 +315,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 ]
             }
         ]
-        
+
         # prompt_message_constraint = [
         #     {
         #         "role": "system",
@@ -239,10 +339,10 @@ def process_images(selected_frames, obj_list, interim_frames=None):
         #         ]
         #     }
         # ]
-        
+
         # response_constraint = call_openai_api(prompt_message_constraint)
         # print(response_constraint)
-        
+
         # # which to pick
         # prompt_messages_pick = [
         #     {
@@ -273,7 +373,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
         #     break
         # # Check if the second frame (i) is relevant (i.e., hand is holding an object)
         # input_frame_drop = selected_frames[i:i+1]
-        # # reference object 
+        # # reference object
         # prompt_messages_reference = [
         #     {
         #         "role": "system",
@@ -297,7 +397,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
         # print(response_reference)
         # object_reference = extract_keywords_reference(response_reference)
         # # current_bbx = bbx_list[i] if i < len(bbx_list) else {}
-        
+
         #             # "Due to limitation of vision models, the contours and index labels might not cover every objects in the environment. If you notice any unannotated objects in the demo or in the object list, make sure you handle them properly.",
         # prompt_messages_relationship = [
         #     {
@@ -338,9 +438,9 @@ def process_images(selected_frames, obj_list, interim_frames=None):
         # response_relationship = call_openai_api(prompt_messages_relationship)
         # print(response_relationship)
         # string_cache += response_relationship + " and then "
-        
+
         i += 1
-    
+
     prompt_image_list = [
                     {
                         "type": "image_url",
@@ -348,7 +448,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                             "url": f"data:image/jpeg;base64,{frame}",
                         }
                     } for frame in selected_frames]
-    
+
     prompt_messages_check = [
             {
                 "role": "system",
@@ -370,30 +470,37 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 ] + prompt_image_list
             }
         ]
-    
+
     response_analysis_checked = call_openai_api(prompt_messages_check)
     # print("Revised response:", response_analysis_checked)
     # string_cache += response_analysis + '\n'
     # last_step_description = response_analysis
-    
+
     revised_response_list = response_analysis_checked.strip('\n ').split('[SEG]')
     revised_response_list = [response.strip('\n ') for response in revised_response_list if 'Objects:' in response and 'Interaction:' in response]
     print("Revised response list:", revised_response_list)
-    
+
+    # save the revised response list to the same file
+    with open(os.path.join(output_dir, "response_analysis.txt"), "a") as f:
+        f.write("Revised response list:\n")
+        f.write(response_analysis_checked)
+
+
     constraint_desc_list = []
     obj_keypoint_dict = dict()
     constraint_obj_list = obj_list.copy()
     obj_scaffold_list = dict()
     scaffold_grid_dict = dict()
     start_image = None
-    
+    detected_object_list = []
+
     for i in range(len(revised_response_list)):
         input_frame_analysis_1 = selected_frames[i]
         input_frame_analysis_2 = selected_frames[i+1]
         interim_frame_analysis = interim_frames[i] if interim_frames else None
-        
+
         frame_analysis = revised_response_list[i]
-        
+
         if i==0:
             input_frame_analysis_1_rgb = base64_to_cv2(input_frame_analysis_1)
             start_image_array = cv2.cvtColor(input_frame_analysis_1_rgb, cv2.COLOR_BGR2RGB)
@@ -402,7 +509,16 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             frame_object_list = frame_analysis.split("Interaction:")[0].split("Objects:")[1].strip().split(',') if "Interaction:" in response_analysis else ""
             for object_name in obj_list:
                 start_image_copy = start_image.copy()
+
                 box_coords = find_keypoint_coords(input_frame_analysis_1_rgb, object_name.strip('. '), save_path=f"./visualization/{i}_{object_name.strip('. ')}.jpg")
+
+
+                # print(box_coords,end=f'  box coords of {object_name/}\n')
+                if box_coords is not None:
+                    detected_object_list.append(object_name)
+                else:
+                    continue
+
                 box_coords  = box_coords[0] * np.array([w, h, w, h])
                 # box_center = int((box_coords[0] + box_coords[2]) / 2), int((box_coords[1] + box_coords[3]) / 2)
                 # box_width = 2 * np.ceil(max(box_coords[0] - box_center[0], box_center[0] - box_coords[2]))
@@ -410,24 +526,48 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 box_center = round(box_coords[0]), round(box_coords[1])
                 box_width = round(box_coords[2])
                 box_height = round(box_coords[3])
-                scaffold_img, (box_left, box_top), (cell_width, cell_height) = dot_matrix_two_dimensional_with_box(
-                    image_or_image_path=start_image_copy,
-                    save_path=f"./visualization/scaffold_{object_name.strip('. ')}.jpg",
-                    save_img=True,
-                    box_width=box_width,
-                    box_height=box_height,
-                    box_coords=box_center,
-                    font_path="/usr/share/fonts/truetype/arial/arial.ttf"
-                )
+                # import pdb; pdb.set_trace()
+                ### save pic of start_image_copy with box
+                ## 不用 imagedraw 画框，而是用 cv2 画框
+                box_left = box_center[0] - box_width // 2
+                box_top = box_center[1] - box_height // 2
+                box_right = box_center[0] + box_width // 2
+                box_bottom = box_center[1] + box_height // 2
+                box = np.array([box_left, box_top, box_right, box_bottom])
+                # cv2.rectangle(start_image_copy, (box_left, box_top), (box_left + box_width, box_top + box_height), (0, 0, 255), 2)
+                # start_image_copy.save(f"./visualization/start_image_copy_with_box_{object_name.strip('. ')}.jpg")
+                sam2_predictor.set_image(start_image_copy)
+                masks, scores, _ = sam2_predictor.predict(box=[box_left, box_top, box_right, box_bottom])
+                print(masks,end=f'  masks of {object_name}\n')
+                print(scores,end=f'  scores of {object_name}\n')
+
+                show_masks(start_image_copy, masks, scores, object_name, box_coords=box)
+                # import pdb; pdb.set_trace()
+                # scaffold_img, (box_left, box_top), (cell_width, cell_height) = dot_matrix_two_dimensional_with_box(
+                #     image_or_image_path=start_image_copy,
+                #     save_path=f"./visualization/scaffold_{object_name.strip('. ')}.jpg",
+                #     save_img=True,
+                #     box_width=box_width,
+                #     box_height=box_height,
+                #     box_coords=box_center,
+                #     font_path="/usr/share/fonts/truetype/arial/arial.ttf"
+                # )
+                # highest score
+                highest_score_index = np.argmax(scores)
+                mask = masks[highest_score_index]
+                scaffold_img, sampled_coords = annotate_image(start_image_copy, save_path=f"./visualization/annotated_scaffold_{object_name.strip('. ')}.jpg", mask=mask)
                 obj_scaffold_list[object_name.strip('. ')] = scaffold_img
                 scaffold_grid_dict[object_name.strip('. ')] = {
                     "box_left": box_left,
                     "box_top": box_top,
-                    "cell_width": cell_width,
-                    "cell_height": cell_height,
+                    "cell_width": box_width,
+                    "cell_height": box_height,
+                    "sampled_coords": sampled_coords
                 }
-                
-        
+            print(detected_object_list,end=f'  detected object list\n')
+
+
+
         example_json = {
             "Subpath": {
                 "Constraint": "The cube being picked up should be in contact with the hand.",
@@ -442,10 +582,10 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                     "plate": "the center of the plate",
                     "cube": "the center of the cube",
                 },
-                
+
             },
         }
-        
+
         example_json_2 = {
             "Subpath": 'N/A',
             "Subgoal": {
@@ -456,14 +596,14 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 },
             },
         }
-        
+
         json_string = json.dumps(example_json, indent=4)
-        
+
         json_string_2 = json.dumps(example_json_2, indent=4)
-        
+
         # convert back to json
         # prompt_message_constraint = json.loads(json_string)
-        
+
         prompt_message_constraint = [
             {
                 "role": "system",
@@ -493,7 +633,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                 ]
             }
         ]
-        
+
         response_constraint = call_openai_api(prompt_message_constraint)
         try:
             constraint_dict = json.loads(response_constraint)
@@ -501,7 +641,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
             constraint_str = response_constraint.strip("```").strip('json')
             constraint_dict = json.loads(constraint_str)
         print("Constraint response:", constraint_dict)
-        
+
         if isinstance(constraint_dict['Subpath'], dict):
             subpath_constraint_dict = constraint_dict["Subpath"]
             if subpath_constraint_dict != 'N/A':
@@ -510,7 +650,7 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                     if obj_name not in obj_keypoint_dict:
                         obj_keypoint_dict[obj_name] = []
                     obj_keypoint_dict[obj_name].append(keypoint)
-        
+
         if isinstance(constraint_dict['Subgoal'], dict):
             subgoal_constraint_dict = constraint_dict["Subgoal"]
             if subgoal_constraint_dict != 'N/A':
@@ -519,14 +659,22 @@ def process_images(selected_frames, obj_list, interim_frames=None):
                     if obj_name not in obj_keypoint_dict:
                         obj_keypoint_dict[obj_name] = []
                     obj_keypoint_dict[obj_name].append(keypoint)
-        
-    select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, constraint_obj_list, scaffold_grid_dict)
-    
+
+    select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, detected_object_list, scaffold_grid_dict)
+
     return string_cache
 
 def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, scaffold_grid_dict):
+    # print(keypoint_dict,end=f'  keypoint dict before selection\n')
+    print(obj_list,end=f'  obj list\n')
     for obj_name, keypoints in keypoint_dict.items():
+        print(obj_name,end=f'  obj name\n')
+        # delete space in beginning and end of obj_name
+        obj_name = obj_name.strip()
+        print(keypoints,end=f'  keypoints\n')
         if obj_name in obj_list:
+            print(obj_name,end=f'  obj name\n')
+            print(keypoints,end=f'  keypoints\n')
             scaffold_params = scaffold_grid_dict.get(obj_name, None)
             scaffold_img = scaffold_img_dict.get(obj_name, None)
             assert scaffold_img is not None, f"Scaffold image for {obj_name} not found."
@@ -534,37 +682,57 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             scaffold_img_cv2 = cv2.cvtColor(np.array(scaffold_img), cv2.COLOR_RGB2BGR)
             _, scaffold_img_encoded = cv2.imencode('.jpg', scaffold_img_cv2)
             scaffold_img_base64 = base64.b64encode(scaffold_img_encoded).decode('utf-8')
+            # prompt_message_keypoint = [
+            #     {
+            #         "role": "system",
+            #         "content": [
+            #             {"type": "text", "text": "You are a keypoint selector. You need to select a grid point on an image that best fits the description."}
+            #         ],
+            #     },
+            #     {
+            #         "role": "user",
+            #         "content": [
+            #             {"type": "text", "text": f"You are provided with an image in which one onject is overlaid with a grid of points. For each of the following keypoint decsriptions, please select the point that best fits the description of the keypoint on the object."},
+            #             {"type": "text", "text": f"If the description refers to a small part or a point on the object, select the grid point that is closest to the point. If the description refers to a large part or a region on the object, select the grid point that is closest to the center of the part."},
+            #             {"type": "text", "text": f"Each candidate grid point is marked with a tuple of integers slighty to the right and below the point. The coordinates are in the format (x, y), where x is the horizontal index and y is the vertical index. "},
+            #             {"type": "text", "text": f"Please report your selection in the format of a list of tuples (x,y), with no additional text or explanation. Each tuple corresponds to a provided keypoint description in the same order. You should respond in the format of the following example:"},
+            #             {"type": "text", "text": f"[(1, 2), (2,3)]"},
+            #             {"type": "text", "text": f"The object being described is {obj_name}. If multiple descriptions refer to the same keypoint, you may only return distinct keypoints in your response."},
+            #             {"type": "text", "text": f"The keypoint descriptions are {keypoints}, and the overlaid image is as follows:"},
+            #             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{scaffold_img_base64}"}},
+            #         ]
+            #     }
+            # ]
+            # set a prompt to select the keypoints not for grid points but for some circled points with black edge and number inside the circle
             prompt_message_keypoint = [
                 {
                     "role": "system",
                     "content": [
-                        {"type": "text", "text": "You are a keypoint selector. You need to select a grid point on an image that best fits the description."}
-                    ],
+                        {"type": "text", "text": "You are a keypoint selector.  I have annotated the image with numbered circles. You need to select some circled points with black edge and number inside the circle on an image that best fits the description."}
+                    ]
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"You are provided with an image in which one onject is overlaid with a grid of points. For each of the following keypoint decsriptions, please select the point that best fits the description of the keypoint on the object."},
-                        {"type": "text", "text": f"If the description refers to a small part or a point on the object, select the grid point that is closest to the point. If the description refers to a large part or a region on the object, select the grid point that is closest to the center of the part."},
-                        {"type": "text", "text": f"Each candidate grid point is marked with a tuple of integers slighty to the right and below the point. The coordinates are in the format (x, y), where x is the horizontal index and y is the vertical index. "},
-                        {"type": "text", "text": f"Please report your selection in the format of a list of tuples (x,y), with no additional text or explanation. Each tuple corresponds to a provided keypoint description in the same order. You should respond in the format of the following example:"},
-                        {"type": "text", "text": f"[(1, 2), (2,3)]"},
+                        {"type": "text", "text": f"Please report your selection in the format of a list of numbers with no additional text or explanation. Each number corresponds to a provided keypoint description in the same order. You should respond in the format of the following example:"},
+                        {"type": "text", "text": f"[0, 8, 9]"},
                         {"type": "text", "text": f"The object being described is {obj_name}. If multiple descriptions refer to the same keypoint, you may only return distinct keypoints in your response."},
                         {"type": "text", "text": f"The keypoint descriptions are {keypoints}, and the overlaid image is as follows:"},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{scaffold_img_base64}"}},
                     ]
                 }
             ]
-            
             response_keypoint = call_openai_api(prompt_message_keypoint)
             keypoint_index_list = eval(response_keypoint) if response_keypoint else []
             print("Keypoint response:", keypoint_index_list)
             # Check if the response is a list of tuples
-            if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
-                print(f"Invalid response format for {obj_name}: {response_keypoint}")
-                continue
-            annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
-            
+
+            # if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
+            #     print(f"Invalid response format for {obj_name}: {response_keypoint}")
+            #     continue
+
+            annotated_image_np = visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
+
             # Draw the keypoints on the image
             # for point in keypoints:
             #     x, y = point
@@ -574,6 +742,7 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
     return annotated_image_np
 
 def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
+    ## for grid points
     # Create a copy of the start image to draw on
     annotated_image = start_image.copy()
     annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
@@ -587,8 +756,27 @@ def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_param
         cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(label_x) + 10, int(label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         # save fig
     cv2.imwrite(f"./visualization/keypoints_{obj_name}.jpg", annotated_image_np)
-    
+
     return annotated_image_np
+
+def visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
+    # Create a copy of the start image to draw on
+    annotated_image = start_image.copy()
+    annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
+    coords = scaffold_params["sampled_coords"]
+    # Draw keypoints and labels on the image
+    for index, id in enumerate(keypoint_index_list):
+        y, x = coords[id]
+        # Calculate the position for the label
+        # label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
+        # label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
+        cv2.circle(annotated_image_np, (int(x), int(y)), 5, (0, 255, 0), -1)
+        cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(x) + 10, int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        # save fig
+    cv2.imwrite(f"./visualization/visualized_keypoints_{obj_name}.jpg", annotated_image_np)
+
+    return annotated_image_np
+
 
 def save_results_to_csv(demo_name, num, obj_list, string_cache, output_file):
     file_exists = os.path.exists(output_file)
@@ -596,10 +784,10 @@ def save_results_to_csv(demo_name, num, obj_list, string_cache, output_file):
         writer = csv.writer(file)
         if not file_exists:
             writer.writerow(["demo", "object", "action list"])
-        
+
         writer.writerow([f"{demo_name}", f"{num} objects: {', '.join(obj_list)}", string_cache])
     print(f"Results appended to {output_file}")
-    
+
 def convert_video_to_mp4(input_path):
     """
     Converts the input video file to H.264 encoded .mp4 format using ffmpy.
@@ -628,19 +816,25 @@ def get_interim_frame_index(frame_index_list):
         interim_frame_index.append(middle_index)
     return interim_frame_index
 
-def main(input_video_path, frame_index_list, bbx_list):
+def main(input_video_path, frame_index_list, bbx_list, output_dir):
+    ### create output directory if not exists
+    os.makedirs(output_dir, exist_ok=True)
+
     video_path = input_video_path
     # list to store key frames
     selected_raw_frames1 = []
     interim_raw_frames1 = []
     # list to store key frame indexes
     frame_index_list = ast.literal_eval(frame_index_list)
+    if 0 not in frame_index_list:
+        frame_index_list.insert(0, 0)
     print('---SELECTED FRAMES---', frame_index_list)
     interim_index_list = get_interim_frame_index(frame_index_list)
     print('---INTERIM FRAMES---', interim_index_list)
     selected_frame_index = frame_index_list
     # Convert the video to H.264 encoded .mp4 format
     # converted_video_path = convert_video_to_mp4(video_path)
+    # exit(0)
     # Open the converted video
     cap = cv2.VideoCapture(video_path)
     # Manually calculate total number of frames
@@ -684,7 +878,8 @@ def main(input_video_path, frame_index_list, bbx_list):
     print("available objects:", obj_list)
     # obj_list = "green corn, orange carrot, red pepper, white bowl, glass container"
     # process the key frames
-    string_cache = process_images(selected_frames1, obj_list, interim_frames1)
+    # exit(0)
+    string_cache = process_images(selected_frames1, obj_list, interim_frames1, output_dir)
     # if string_cache.endswith(" and then "):
     #     my_string = string_cache.removesuffix(" and then ")
     # print(string_cache)
@@ -695,6 +890,7 @@ if __name__ == "__main__":
     parser.add_argument('--input', type=str, required=True, help='Input video path')
     parser.add_argument('--list', type=str, required=True, help='List of key frame indexes')
     parser.add_argument('--bbx_list', type=str, required=True, help='Bbx of key frames')
+    parser.add_argument('--output', type=str, required=True, help='Output file path')
     args = parser.parse_args()
     # Call the main function with arguments
-    main(args.input, args.list, args.bbx_list)
+    main(args.input, args.list, args.bbx_list, args.output)

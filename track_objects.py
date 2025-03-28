@@ -110,7 +110,7 @@ def get_object_list(video_path, client):
             ],
         },
     ]
-    
+
     prompt_messages_state = [
         {
             "role": "system",

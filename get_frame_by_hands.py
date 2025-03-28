@@ -36,7 +36,7 @@ class FrameExtractor:
         self.prominence = prominence
 
         self.csv_file = csv_file
- 
+
     def extract_frames(self):
         '''
         Extract the frames from the video.
@@ -54,7 +54,7 @@ class FrameExtractor:
             self.plot_speed(self.all_speeds[handedness], handedness)
             print(f"Making the video of the {handedness} hand.")
             self.make_video(handedness)
-        
+
         print("Deciding which hand to focus on.")
         self.handedness = "Right"
         print(f"The decided handedness is {self.handedness}.")
@@ -72,10 +72,10 @@ class FrameExtractor:
                 selected_valleys.append(valleys[i])
 
         print(f"Plotting and making videos with smoothed {self.handedness} hand speed curve.")
-        self.plot_speed(speeds=smoothed_curve, 
+        self.plot_speed(speeds=smoothed_curve,
                         handedness=f'Smoothed {self.handedness}',
                         selected_frame=selected_valleys)
-        
+
         self.make_video(f'Smoothed {self.handedness}')
 
         first_frame = self.get_frame(0)
@@ -128,7 +128,7 @@ class FrameExtractor:
                 results = landmarker.detect_for_video(mp_image, mp_timestamp) # detect the hands in the frame
 
                 # Draw the landmarks on the image and get the average x and y coordinates of the hand landmarks in this frame.
-                annotated_image, avg_landmark_x, avg_landmark_y, all_handedness = self.process_frame_results(rgb_image=frame, 
+                annotated_image, avg_landmark_x, avg_landmark_y, all_handedness = self.process_frame_results(rgb_image=frame,
                                                                                                        detection_result=results)
 
                 if len(all_handedness) == 0:
@@ -142,8 +142,8 @@ class FrameExtractor:
 
             # save the image to a folder, not as a video
             cv2.imwrite(f'{str(self.hand_images_folder)}/{frame_counter}.jpg', annotated_image)
-            
-            
+
+
             frame_counter += 1
 
         '''
@@ -152,7 +152,7 @@ class FrameExtractor:
         '''
         for handedness in self.all_landmark_pos.keys():
             self.all_landmark_pos[handedness] = np.where(self.all_landmark_pos[handedness] == 0, np.nan, self.all_landmark_pos[handedness])
-    
+
     def process_frame_results(self, rgb_image, detection_result):
         '''
         Annotate the image with the hand landmarks and handedness.
@@ -174,12 +174,12 @@ class FrameExtractor:
         hand_landmarks_list = detection_result.hand_landmarks
         handedness_list = detection_result.handedness
         annotated_image = np.copy(rgb_image)
-        
+
 
         avg_landmark_x = {} # average x coordinate of the hand landmarks in this frame
         avg_landmark_y = {} # average y coordinate of the hand landmarks in this frame
         all_handedness = set() # all handedness detected in this frame
-        
+
         # Loop through the detected hands to visualize.
         for idx in range(len(hand_landmarks_list)):
             hand_landmarks = hand_landmarks_list[idx]
@@ -214,7 +214,7 @@ class FrameExtractor:
                         self.FONT_SIZE, self.HANDEDNESS_TEXT_COLOR, self.FONT_THICKNESS, cv2.LINE_AA)
 
         return annotated_image, avg_landmark_x, avg_landmark_y, all_handedness
-    
+
     def decide_handedness(self):
         '''
         Decide which hand is the one we are interested in.
@@ -229,11 +229,11 @@ class FrameExtractor:
         if len(self.all_possible_handedness) == 0:
             # no hand detected in the video
             return None
-        
+
         scoreboard = {}
         for handedness in self.all_possible_handedness:
             scoreboard[handedness] = 0
-        
+
         # count which hand has the most non-zero landmarks
         max_nonzero_num = 0
         max_nonzero_handedness = None
@@ -252,7 +252,7 @@ class FrameExtractor:
             if non_zero_count > max_nonzero_num:
                 max_nonzero_num = non_zero_count
                 max_nonzero_handedness = handedness
-            
+
             # decide which hand has the most speed range
             speed_max = np.nanmax(self.all_speeds[handedness])
             speed_min = np.nanmin(self.all_speeds[handedness])
@@ -260,21 +260,21 @@ class FrameExtractor:
             if speed_range > max_speed_range:
                 max_speed_range = speed_range
                 max_speed_range_handedness = handedness
-            
+
             pos_max = np.nanmax(self.all_landmark_pos[handedness])
             pos_min = np.nanmin(self.all_landmark_pos[handedness])
             pos_range = pos_max - pos_min
             if pos_range > max_range:
                 max_range = pos_range
                 max_range_handedness = handedness
-        
+
         scoreboard[max_nonzero_handedness] += 1
         scoreboard[max_speed_range_handedness] += 1
         scoreboard[max_range_handedness] += 1
 
         # return the hand with the most votes
         return max(scoreboard, key=scoreboard.get) # type: ignore
-    
+
     def process_speed_curve(self):
         '''
         Process the speed curve of the hand so we can find peaks and valley more robustly.
@@ -290,13 +290,16 @@ class FrameExtractor:
         y = self.all_speeds[self.handedness]
         nans, x_nans = np.isnan(y), lambda z: z.nonzero()[0]
         y_interpolated = y.copy()
+        print(x_nans(nans),end=" x_nans(nans)\n")
+        print(x_nans(~nans),end=" x_nans(~nans)\n")
+        print(y[~nans],end=" y[~nans]\n")
         y_interpolated[nans] = np.interp(x_nans(nans), x_nans(~nans), y[~nans])
 
-        # Gaussian filter smoothing 
+        # Gaussian filter smoothing
         y_smoothed = gaussian_filter(y_interpolated, sigma=self.gaussian_sigma)
 
         return y_smoothed
-    
+
     def get_peaks_valleys(self, smoothed_curve):
         '''
         Get the peaks and valleys of the speed curve.
@@ -338,7 +341,7 @@ class FrameExtractor:
             print(f"Something went wrong when reading frame {frame_number}.")
             return np.zeros((self.VIDEO_HEIGHT, self.VIDEO_WIDTH, 3))
         return frame
-    
+
     def get_speed(self, coordinates):
         '''
         Get the speed curve of the hand.
@@ -351,7 +354,7 @@ class FrameExtractor:
             else:
                 speed[i] = None
         return speed
-    
+
     def plot_speed(self, speeds, handedness, selected_frame=None):
         '''
         Plot the speed curve of the hand. Overlay the current hand speed of i-th frame on the entire speed curve.
@@ -411,7 +414,7 @@ class FrameExtractor:
             min_hand_presence_confidence=0.2,
             min_tracking_confidence=0.2,
             )
-    
+
     def _visualization_init(self):
         '''
         Initialize the visualization parameters.
@@ -422,7 +425,7 @@ class FrameExtractor:
         self.HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
         self.VIDEO_WIDTH = 640
         self.VIDEO_HEIGHT = 480
-    
+
     def _folder_init(self, video_path, output_dir):
         '''
         Initialize all folder-related stuff.
