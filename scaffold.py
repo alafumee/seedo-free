@@ -135,8 +135,11 @@ def annotate_image(image_or_image_path, save_path = None, font_path = 'fonts/ari
         if img.mode != 'RGB':
             img = img.convert('RGB')
         width, height = img.size
+        # img = img.convert('RGB')
         # 将 PIL Image 转换为 numpy 数组
         img = np.array(img)
+
+
 
     # uniformly sample points from the mask
     font_path = "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf"
@@ -183,7 +186,9 @@ def annotate_image(image_or_image_path, save_path = None, font_path = 'fonts/ari
         alpha = 0.7  # 增加文字不透明度
         img = cv2.addWeighted(img, 1 - alpha, overlay, alpha, 0)
     if save_path is not None:
+        # import pdb; pdb.set_trace()
         print(">>> annotated image processed, stored in", save_path)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(save_path, img)
     return img, sampled_coords
 

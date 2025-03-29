@@ -19,6 +19,7 @@ from scaffold import dot_matrix_two_dimensional_with_box, annotate_image
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 import matplotlib.pyplot as plt
+task_name = ""
 def show_mask(mask, ax, random_color=False, borders = True):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -39,7 +40,7 @@ def show_points(coords, labels, ax, marker_size=375):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
     ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], pos_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
 
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -64,7 +65,7 @@ def show_masks(image, masks, scores, obj_name, point_coords=None, box_coords=Non
         plt.axis('off')
         # plt.show()
     # save the plot
-        plt.savefig(f"/home/yunzhe/seedo-free/visualization/{obj_name}_mask_{i}.jpg")
+        plt.savefig(f"visualization_new/{task_name}/{obj_name}_mask_{i}.jpg")
 def build_sam2_model():
     print("building sam2 model ---------\n")
     sam2_checkpoint = "../SeeDo/segment-anything-2/checkpoints/sam2.1_hiera_large.pt"
@@ -293,6 +294,18 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
         ]
         response_analysis = call_openai_api(prompt_messages_analysis)
         print(response_analysis)
+        # 从response中提取objects
+        stage_object_list = []
+        if "Objects:" in response_analysis and "Contact Relations:" in response_analysis:
+            # 提取Objects和Interaction之间的文本
+            objects_text = response_analysis.split("Contact Relations:")[0].split("Objects:")[1].strip()
+            # 分割成单独的object并去除空格
+            stage_object_list = [obj.strip() for obj in objects_text.split(",")]
+            print("Extracted objects:", stage_object_list)
+            ## merge the object list with the previous stage
+            obj_list = list(set(obj_list + stage_object_list))
+            print("Merged objects:", obj_list)
+
         ### save the response_analysis to a file
         with open(os.path.join(output_dir, "response_analysis.txt"), "a") as f:
             f.write(f"from frame {i} to frame {i+1}\n")
@@ -516,14 +529,19 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
 
         if i==0:
             input_frame_analysis_1_rgb = base64_to_cv2(input_frame_analysis_1)
+            start_image_array = input_frame_analysis_1_rgb
             start_image_array = cv2.cvtColor(input_frame_analysis_1_rgb, cv2.COLOR_BGR2RGB)
             start_image = Image.fromarray(start_image_array)
+            ## save start_image
+            # import pdb; pdb.set_trace()
+            start_image.save(f"visualization_new/{task_name}/start_image_{i}.jpg")
             w, h = start_image.size
             frame_object_list = frame_analysis.split("Interaction:")[0].split("Objects:")[1].strip().split(',') if "Interaction:" in response_analysis else ""
             for object_name in obj_list:
+                start_image_array_copy = start_image_array.copy()
                 start_image_copy = start_image.copy()
-
-                box_coords = find_keypoint_coords(input_frame_analysis_1_rgb, object_name.strip('. '), save_path=f"./visualization/{i}_{object_name.strip('. ')}.jpg")
+                # use start_image_array_copy to find keypoint coords
+                box_coords = find_keypoint_coords(start_image_array_copy, object_name.strip('. '), save_path=f"visualization_new/{task_name}/{i}_{object_name.strip('. ')}.jpg")
 
 
                 # print(box_coords,end=f'  box coords of {object_name/}\n')
@@ -548,7 +566,7 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                 box_bottom = box_center[1] + box_height // 2
                 box = np.array([box_left, box_top, box_right, box_bottom])
                 # cv2.rectangle(start_image_copy, (box_left, box_top), (box_left + box_width, box_top + box_height), (0, 0, 255), 2)
-                # start_image_copy.save(f"./visualization/start_image_copy_with_box_{object_name.strip('. ')}.jpg")
+                # start_image_copy.save(f"visualization_new/{task_name}/start_image_copy_with_box_{object_name.strip('. ')}.jpg")
                 sam2_predictor.set_image(start_image_copy)
                 masks, scores, _ = sam2_predictor.predict(box=[box_left, box_top, box_right, box_bottom])
                 print(masks,end=f'  masks of {object_name}\n')
@@ -558,7 +576,7 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                 # import pdb; pdb.set_trace()
                 # scaffold_img, (box_left, box_top), (cell_width, cell_height) = dot_matrix_two_dimensional_with_box(
                 #     image_or_image_path=start_image_copy,
-                #     save_path=f"./visualization/scaffold_{object_name.strip('. ')}.jpg",
+                #     save_path=f"visualization_new/{task_name}/scaffold_{object_name.strip('. ')}.jpg",
                 #     save_img=True,
                 #     box_width=box_width,
                 #     box_height=box_height,
@@ -568,7 +586,7 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
                 # highest score
                 highest_score_index = np.argmax(scores)
                 mask = masks[highest_score_index]
-                scaffold_img, sampled_coords = annotate_image(start_image_copy, save_path=f"./visualization/annotated_scaffold_{object_name.strip('. ')}.jpg", mask=mask)
+                scaffold_img, sampled_coords = annotate_image(start_image_copy, save_path=f"visualization_new/{task_name}/annotated_scaffold_{object_name.strip('. ')}.jpg", mask=mask)
                 obj_scaffold_list[object_name.strip('. ')] = scaffold_img
                 scaffold_grid_dict[object_name.strip('. ')] = {
                     "box_left": box_left,
@@ -678,8 +696,9 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
     keypoint_coord_list = select_keypoints(start_image, obj_scaffold_list, obj_keypoint_dict, constraint_obj_list, scaffold_grid_dict)
 
     # save start_image
-    start_image.save(f"./rekep_ready/start_image.jpg")
-    start_image_path = os.path.abspath(f"./rekep_ready/start_image.jpg")
+    os.makedirs(f"./rekep_ready/{task_name}", exist_ok=True)
+    start_image.save(f"./rekep_ready/{task_name}/start_image.jpg")
+    start_image_path = os.path.abspath(f"./rekep_ready/{task_name}/start_image.jpg")
     print(start_image_path)
 
     # organize the substage descriptions and constraint descriptions
@@ -704,7 +723,7 @@ def process_images(selected_frames, obj_list, interim_frames=None, output_dir=No
     }
      # save as json
     composed_json_string = json.dumps(composed_json_dict, indent=4)
-    output_file_path = os.path.join(os.path.dirname(start_image_path), "output.json")
+    output_file_path = os.path.join(os.path.dirname(start_image_path), f"{task_name}_output.json")
     with open(output_file_path, "w") as json_file:
         json_file.write(composed_json_string)
 
@@ -722,7 +741,10 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             print(keypoints,end=f'  keypoints\n')
             scaffold_params = scaffold_grid_dict.get(obj_name, None)
             scaffold_img = scaffold_img_dict.get(obj_name, None)
-            assert scaffold_img is not None, f"Scaffold image for {obj_name} not found."
+            if scaffold_img is None:
+                print(f"Scaffold image for {obj_name} not found.")
+                continue
+            # assert scaffold_img is not None, f"Scaffold image for {obj_name} not found."
             # Convert scaffold_img to JPEG format
             scaffold_img_cv2 = cv2.cvtColor(np.array(scaffold_img), cv2.COLOR_RGB2BGR)
             _, scaffold_img_encoded = cv2.imencode('.jpg', scaffold_img_cv2)
@@ -777,12 +799,12 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             #     print(f"Invalid response format for {obj_name}: {response_keypoint}")
             #     continue
 
-            annotated_image_np = visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
+            keypoint_coord_list, annotated_image_np = visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
 
-            if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
-                print(f"Invalid response format for {obj_name}: {response_keypoint}")
-                continue
-            keypoint_coord_list, annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
+            # if not isinstance(keypoint_index_list, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in keypoint_index_list):
+            #     print(f"Invalid response format for {obj_name}: {response_keypoint}")
+            #     continue
+            # keypoint_coord_list, annotated_image_np = annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name)
             all_keypoints_list.extend(keypoint_coord_list)
             # Draw the keypoints on the image
             # for point in keypoints:
@@ -792,33 +814,37 @@ def select_keypoints(start_image, scaffold_img_dict, keypoint_dict, obj_list, sc
             # cv2.putText(annotated_image, obj_name, (x + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
     return all_keypoints_list
 
-def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
-    ## for grid points
-    # Create a copy of the start image to draw on
-    keypoint_coord_list = []
-    annotated_image = start_image.copy()
-    annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
-    # Draw keypoints and labels on the image
-    for index, point in enumerate(keypoint_index_list):
-        y, x = point
-        # Calculate the position for the label
-        label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
-        label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
-        keypoint_coord_list.append((int(label_x), int(label_y)))
-        cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 4, (0, 255, 0), -1)
-        cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(label_x) + 10, int(label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        # save fig
-    cv2.imwrite(f"./visualization/keypoints_{obj_name}.jpg", annotated_image_np)
+# def annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
+#     ## for grid points
+#     # Create a copy of the start image to draw on
+#     keypoint_coord_list = []
+#     annotated_image = start_image.copy()
+#     annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
+#     # Draw keypoints and labels on the image
+#     for index, point in enumerate(keypoint_index_list):
+#         import pdb; pdb.set_trace()
+#         print(point,end=f'  point\n')
+#         y, x = point
+#         # Calculate the position for the label
+#         label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
+#         label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
+#         keypoint_coord_list.append((int(label_x), int(label_y)))
+#         cv2.circle(annotated_image_np, (int(label_x), int(label_y)), 4, (0, 255, 0), -1)
+#         cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(label_x) + 10, int(label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+#         # save fig
+#     cv2.imwrite(f"visualization_new/{task_name}/keypoints_{obj_name}.jpg", annotated_image_np)
 
-    # return annotated_image_np
-        print(f"keypoint {y},{x}, position: ", int(label_x), int(label_y))
-    cv2.imwrite(f"./visualization_3/keypoints_{obj_name}.jpg", annotated_image_np)
+#     # return annotated_image_np
+#     print(f"keypoint {y},{x}, position: ", int(label_x), int(label_y))
+#     # cv2.imwrite(f"visualization_new/{task_name}/keypoints_{obj_name}.jpg", annotated_image_np)
 
-    return keypoint_coord_list, annotated_image_np
+#     return keypoint_coord_list, annotated_image_np
 
 def visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaffold_params, obj_name):
+    ## new version of annotate keypoints on image
     # Create a copy of the start image to draw on
     annotated_image = start_image.copy()
+    keypoint_coord_list = []
     annotated_image_np = cv2.cvtColor(np.array(annotated_image), cv2.COLOR_RGB2BGR)
     coords = scaffold_params["sampled_coords"]
     # Draw keypoints and labels on the image
@@ -828,11 +854,12 @@ def visualize_annotate_keypoints_on_image(start_image, keypoint_index_list, scaf
         # label_x = scaffold_params["box_left"] + (x-1) * scaffold_params["cell_width"]
         # label_y = scaffold_params["box_top"] + (y-1) * scaffold_params["cell_height"]
         cv2.circle(annotated_image_np, (int(x), int(y)), 5, (0, 255, 0), -1)
+        keypoint_coord_list.append((int(x), int(y)))
         cv2.putText(annotated_image_np, str(y) + ', ' + str(x), (int(x) + 10, int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         # save fig
     cv2.imwrite(f"./visualization/visualized_keypoints_{obj_name}.jpg", annotated_image_np)
 
-    return annotated_image_np
+    return keypoint_coord_list, annotated_image_np
 
 
 def save_results_to_csv(demo_name, num, obj_list, string_cache, output_file):
@@ -924,7 +951,7 @@ def main(input_video_path, frame_index_list, bbx_list, output_dir):
                 # save img
                 interim_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
                 interim_image = Image.fromarray(interim_image)
-                interim_image.save(f"./visualization_3/interim_{index}.jpg")
+                interim_image.save(f"./visualization/interim_{index}.jpg")
             else:
                 print(f"Failed to retrieve frame at index {index}")
         else:
@@ -953,5 +980,21 @@ if __name__ == "__main__":
     parser.add_argument('--bbx_list', type=str, required=True, help='Bbx of key frames')
     parser.add_argument('--output', type=str, required=True, help='Output file path')
     args = parser.parse_args()
+    task_name = args.input.split("/")[-1].split(".")[0]
+    print(task_name,end=" task_name\n")
+    os.makedirs(f"visualization_new/{task_name}", exist_ok=True)
+
+    # delete all files in the visualization_new folder
+    folder_path = f"visualization_new/{task_name}"
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print(f"Failed to delete {file_path}. Reason: {e}")
+    # exit(0)
     # Call the main function with arguments
     main(args.input, args.list, args.bbx_list, args.output)
